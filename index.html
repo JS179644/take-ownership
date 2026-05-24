@@ -171,8 +171,9 @@
    Personal fitness + mindset + faith operating system.
    Built on Michael Smoak's program. Hosted, private, cloud-synced.
    =================================================================== */
-var APP_VERSION="1.1.1";
+var APP_VERSION="1.1.2";
 var CHANGELOG=[
+ {v:"1.1.2",d:"The app now auto-updates — you always get the newest version when you open it."},
  {v:"1.1.1",d:"StarFit scale weight auto-syncs each morning. Weights show to 2 decimals. Pull down to refresh. Cleaner sign-out."},
  {v:"1.1.0",d:"Hamburger menu with all settings and sign-out. Auto sign-out after inactivity. Face ID unlock option for the journal. Privacy hardening."},
  {v:"1.0.0",d:"First release — hosted, private, synced across your devices. Training, nutrition, meal planning, progress dashboard, daily journal, and more."}
@@ -1530,6 +1531,14 @@ sb.auth.onAuthStateChange(function(ev,session){
 });
 window.addEventListener("online",function(){online=true;save();});
 window.addEventListener("offline",function(){online=false;});
+function checkUpdate(){
+ try{fetch(location.pathname+"?cb="+Date.now(),{cache:"no-store"})
+  .then(function(r){return r.text();})
+  .then(function(h){var m=h.match(/APP_VERSION="([0-9.]+)"/);
+   if(m&&m[1]&&m[1]!==APP_VERSION)location.replace(location.pathname+"?v="+m[1]);})
+  .catch(function(){});}catch(e){}
+}
+checkUpdate();
 boot();
 </script>
 </body>
