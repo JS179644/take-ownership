@@ -170,8 +170,9 @@
    Personal fitness + mindset + faith operating system.
    Built on Michael Smoak's program. Hosted, private, cloud-synced.
    =================================================================== */
-var APP_VERSION="1.0.0";
+var APP_VERSION="1.1.0";
 var CHANGELOG=[
+ {v:"1.1.0",d:"Hamburger menu with all settings and sign-out. Auto sign-out after inactivity. Face ID unlock option for the journal. Privacy hardening."},
  {v:"1.0.0",d:"First release — hosted, private, synced across your devices. Training, nutrition, meal planning, progress dashboard, daily journal, and more."}
 ];
 
@@ -213,7 +214,7 @@ var TRAIN_DAYS=["Monday","Wednesday","Friday"];
 
 function newDB(){return{
  v:1,profile:null,
- settings:{calAdj:0,waterGoalOz:128,mealsPerDay:4,journalPin:null},
+ settings:{calAdj:0,waterGoalOz:128,mealsPerDay:4,journalPin:null,autoLogoutMin:30,journalFaceId:false,journalCredId:null},
  program:defaultProgram(),
  days:{},customFoods:[],savedMeals:[],ideas:[],measurements:[],
  mealPlan:null,weekPlan:null,calibration:null
@@ -376,7 +377,10 @@ function loadAll(cb){
 function boot(){
  sb.auth.getSession().then(function(res){
   var s=res.data.session;
-  if(s&&s.user){USER=s.user;afterLogin();}
+  if(s&&s.user){
+   if(sessionStale()){sb.auth.signOut().then(function(){USER=null;renderAuth();});return;}
+   USER=s.user;afterLogin();
+  }
   else{renderAuth();}
  }).catch(function(){renderAuth();});
 }
@@ -384,6 +388,7 @@ function afterLogin(){
  document.getElementById("app").innerHTML='<div class="splash"><div class="spin"></div><div>Syncing your data…</div></div>';
  loadAll(function(failed){
   if(failed){ if(cacheLoad()){online=false;} }
+  startActivityWatch();
   if(!DB.profile){renderOnboarding();}
   else{state.tab="today";render();}
  });
@@ -427,6 +432,66 @@ function doAuth(){
 }
 function signOut(){
  sb.auth.signOut().then(function(){USER=null;DB=newDB();WEIGHTS=[];authMode="signin";renderAuth();});
+}
+
+/* ---------- AUTO-LOGOUT (inactivity) ---------- */
+var lastAct=Date.now(),logoutInt=null,actWired=false,actSaved=0;
+function bumpActivity(){
+ lastAct=Date.now();
+ if(lastAct-actSaved<5000)return;
+ actSaved=lastAct;
+ try{localStorage.setItem("to_lastact",String(lastAct));
+  localStorage.setItem("to_logoutmin",String((DB.settings&&DB.settings.autoLogoutMin)||30));}catch(e){}
+}
+function startActivityWatch(){
+ if(!actWired){actWired=true;
+  ["click","keydown","touchstart","scroll"].forEach(function(ev){
+   document.addEventListener(ev,bumpActivity,{passive:true});});}
+ if(logoutInt)clearInterval(logoutInt);
+ logoutInt=setInterval(function(){
+  if(!USER)return;
+  var mins=(DB.settings&&DB.settings.autoLogoutMin)||30;
+  if(Date.now()-lastAct>mins*60000){toast("Signed out — inactive for "+mins+" min.");signOut();}
+ },20000);
+ bumpActivity();
+}
+function sessionStale(){
+ try{var la=parseInt(localStorage.getItem("to_lastact")||"0",10);
+  var lm=parseInt(localStorage.getItem("to_logoutmin")||"30",10);
+  if(la&&(Date.now()-la)>lm*60000)return true;}catch(e){}
+ return false;
+}
+
+/* ---------- FACE ID (WebAuthn) for the journal ---------- */
+function b64u(buf){var s="",a=new Uint8Array(buf),i;for(i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);
+ return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");}
+function unb64u(str){str=str.replace(/-/g,"+").replace(/_/g,"/");while(str.length%4)str+="=";
+ var b=atob(str),u=new Uint8Array(b.length),i;for(i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u.buffer;}
+function faceAvailable(){return !!(window.PublicKeyCredential&&navigator.credentials&&window.isSecureContext&&window.crypto&&crypto.getRandomValues);}
+function setupFaceId(){
+ if(!faceAvailable()){toast("Face ID isn't available on this device.");return;}
+ if(!DB.settings.journalPin){toast("Set a passcode first — it's your backup — then enable Face ID.");return;}
+ var ch=new Uint8Array(32);crypto.getRandomValues(ch);
+ var uib=new Uint8Array(16);crypto.getRandomValues(uib);
+ navigator.credentials.create({publicKey:{challenge:ch,rp:{name:"Take Ownership"},
+  user:{id:uib,name:(USER&&USER.email)||"journal",displayName:"Journal"},
+  pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
+  authenticatorSelection:{authenticatorAttachment:"platform",userVerification:"required"},
+  timeout:60000,attestation:"none"}})
+ .then(function(cred){DB.settings.journalFaceId=true;DB.settings.journalCredId=b64u(cred.rawId);
+  save();closeModal();render();toast("Face ID enabled for your journal.");})
+ .catch(function(){toast("Couldn't set up Face ID. Your passcode still works.");});
+}
+function disableFaceId(){DB.settings.journalFaceId=false;DB.settings.journalCredId=null;
+ save();closeModal();render();toast("Face ID removed — passcode still set.");}
+function unlockFace(){
+ if(!DB.settings.journalCredId){toast("Face ID not set up.");return;}
+ var ch=new Uint8Array(32);crypto.getRandomValues(ch);
+ navigator.credentials.get({publicKey:{challenge:ch,
+  allowCredentials:[{type:"public-key",id:unb64u(DB.settings.journalCredId)}],
+  userVerification:"required",timeout:60000}})
+ .then(function(){state.journalUnlocked=true;state.faceFallback=false;render();})
+ .catch(function(){toast("Face ID didn't match — use your passcode.");state.faceFallback=true;render();});
 }
 
 /* ===================================================================
@@ -500,7 +565,7 @@ function ring(val,tgt,color,big){
 function openSheet(inner){document.getElementById("modal").innerHTML=
  '<div class="ov" onclick="if(event.target===this)closeModal()"><div class="sheet">'+inner+'</div></div>';}
 function closeModal(){document.getElementById("modal").innerHTML="";}
-function go(t){state.tab=t;render();window.scrollTo(0,0);}
+function go(t){state.tab=t;state.faceFallback=false;render();window.scrollTo(0,0);}
 
 /* ---------- HEADER + NAV ---------- */
 function renderHeader(){
@@ -509,7 +574,7 @@ function renderHeader(){
  return '<div><div class="wm">TAKE OWNERSHIP</div>'+
   '<div class="h-title">'+(state.tab==="today"&&name?("Hey, "+esc(name)):titles[state.tab])+'</div>'+
   '<div class="h-date">'+prettyDate(new Date())+(online?"":" · offline")+'</div></div>'+
-  '<button class="h-btn" onclick="moreSheet()" aria-label="More">⋯</button>';
+  '<button class="h-btn" onclick="menuSheet()" aria-label="Menu">≡</button>';
 }
 function renderNav(){
  var t=[["today","Today"],["train","Train"],["eat","Eat"],["journal","Journal"],["you","Progress"]],h="",i;
@@ -1092,10 +1157,18 @@ function scrJournal(){
  return h;
 }
 function journalLockScreen(){
- return '<div class="card center" style="margin-top:40px"><div class="card-t">Journal Locked</div>'+
-  '<div class="small muted" style="margin:10px 0">Enter your passcode to open your journal.</div>'+
-  '<input id="jpin" class="inp" type="password" inputmode="numeric" maxlength="8" placeholder="Passcode" style="max-width:160px;margin:0 auto 12px">'+
-  '<button class="btn" onclick="unlockJournal()">Unlock</button></div>';
+ var faceOn=DB.settings.journalFaceId&&DB.settings.journalCredId&&faceAvailable();
+ var h='<div class="card center" style="margin-top:40px"><div class="card-t">Journal Locked</div>';
+ if(faceOn&&!state.faceFallback){
+  h+='<div class="small muted" style="margin:10px 0">Your journal is private. Unlock to open it.</div>';
+  h+='<button class="btn" style="max-width:240px;margin:0 auto" onclick="unlockFace()">Unlock with Face ID</button>';
+  h+='<div style="margin-top:12px"><button class="link" onclick="state.faceFallback=true;render()">Use passcode instead</button></div>';
+ }else{
+  h+='<div class="small muted" style="margin:10px 0">Enter your passcode to open your journal.</div>';
+  h+='<input id="jpin" class="inp" type="password" inputmode="numeric" maxlength="8" placeholder="Passcode" style="max-width:160px;margin:0 auto 12px">';
+  h+='<button class="btn" style="max-width:240px;margin:0 auto" onclick="unlockJournal()">Unlock</button>';
+ }
+ h+='</div>';return h;
 }
 function unlockJournal(){
  var v=document.getElementById("jpin").value;
@@ -1312,35 +1385,53 @@ function saveMeasure(){
 }
 
 /* ---------- MORE / SETTINGS SHEETS ---------- */
-function moreSheet(){
- var h='<div class="grip"></div><div class="sheet-t">Quick Access</div>';
+function menuSheet(){
+ var h='<div class="grip"></div><div class="sheet-t">Menu</div>';
+ h+='<div class="card-t">Quick access</div>';
  h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="ideasSheet()">Content ideas inbox</button>';
  h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="calendarSheet()">Add to Google Calendar</button>';
  h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="weekPlanSheet()">Week plan + shopping list</button>';
- h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="settingsSheet()">App settings</button>';
- h+='<button class="btn ghost mt8" onclick="closeModal()">Close</button>';
+ h+='<div class="card-t" style="margin-top:14px">Settings</div>';
+ h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="editProfileSheet()">Profile &amp; targets</button>';
+ h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="settingsSheet()">App settings &amp; journal lock</button>';
+ h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="exportData()">Export a backup</button>';
+ h+='<button class="btn sec" style="width:100%;margin-bottom:8px" onclick="whatsNewSheet()">What\'s new</button>';
+ h+='<div class="card-t" style="margin-top:14px">Account</div>';
+ h+='<button class="btn ghost" style="width:100%;color:var(--bad);margin-bottom:8px" onclick="signOut()">Sign out</button>';
+ h+='<button class="btn ghost" onclick="closeModal()">Close</button>';
  openSheet(h);
 }
 function settingsSheet(){
+ var s=DB.settings;
  var h='<div class="grip"></div><div class="sheet-t">App Settings</div>';
  h+='<div class="field"><label>Meals per day (for meal plans)</label>'+
-  '<select id="set-meals"><option value="3"'+(DB.settings.mealsPerDay===3?" selected":"")+'>3</option>'+
-  '<option value="4"'+(DB.settings.mealsPerDay===4?" selected":"")+'>4</option></select></div>';
- h+='<div class="field"><label>Water goal (oz/day)</label><input id="set-water" type="number" inputmode="numeric" value="'+(DB.settings.waterGoalOz||128)+'"></div>';
- h+='<div class="field"><label>Journal passcode (blank = no lock)</label>'+
-  '<input id="set-pin" type="text" inputmode="numeric" maxlength="8" value="'+(DB.settings.journalPin||"")+'" placeholder="e.g. 1234"></div>';
+  '<select id="set-meals"><option value="3"'+(s.mealsPerDay===3?" selected":"")+'>3</option>'+
+  '<option value="4"'+(s.mealsPerDay===4?" selected":"")+'>4</option></select></div>';
+ h+='<div class="field"><label>Water goal (oz/day)</label><input id="set-water" type="number" inputmode="numeric" value="'+(s.waterGoalOz||128)+'"></div>';
+ h+='<div class="field"><label>Auto sign-out after inactivity</label><select id="set-logout">'+
+  [15,30,60,120].map(function(m){var lbl=m<60?(m+" minutes"):(m===60?"1 hour":"2 hours");
+   return '<option value="'+m+'"'+(((s.autoLogoutMin||30)===m)?" selected":"")+'>'+lbl+'</option>';}).join("")+
+  '</select></div>';
+ h+='<div class="hr"></div><div class="card-t">Journal Lock</div>';
+ h+='<div class="field"><label>Passcode (blank = no lock)</label>'+
+  '<input id="set-pin" type="text" inputmode="numeric" maxlength="8" value="'+esc(s.journalPin)+'" placeholder="e.g. 1234"></div>';
+ if(faceAvailable()){
+  if(s.journalFaceId)h+='<button class="btn sec" style="width:100%;margin-bottom:6px" onclick="disableFaceId()">Face ID is ON — tap to remove</button>';
+  else h+='<button class="btn sec" style="width:100%;margin-bottom:6px" onclick="setupFaceId()">Enable Face ID unlock (this device)</button>';
+  h+='<div class="tiny muted" style="margin-bottom:12px">Face ID unlocks the journal on this device; your passcode always works as backup.</div>';
+ }else h+='<div class="tiny muted" style="margin-bottom:12px">Face ID unlock isn\'t supported here — passcode lock still works.</div>';
  h+='<button class="btn" onclick="saveSettings()">Save settings</button>';
- h+='<button class="btn sec mt8" style="width:100%" onclick="exportData()">Export a backup</button>';
  h+='<button class="btn ghost mt8" onclick="closeModal()">Cancel</button>';
  openSheet(h);
 }
 function saveSettings(){
  DB.settings.mealsPerDay=parseInt(document.getElementById("set-meals").value);
  DB.settings.waterGoalOz=parseInt(document.getElementById("set-water").value)||128;
+ DB.settings.autoLogoutMin=parseInt(document.getElementById("set-logout").value)||30;
  var pin=document.getElementById("set-pin").value.trim();
  DB.settings.journalPin=pin||null;
- if(!pin)state.journalUnlocked=false;
- save();closeModal();render();toast("Settings saved.");
+ if(!pin){state.journalUnlocked=false;DB.settings.journalFaceId=false;DB.settings.journalCredId=null;}
+ bumpActivity();save();closeModal();render();toast("Settings saved.");
 }
 function editProfileSheet(){
  var p=DB.profile,ft=Math.floor(p.heightIn/12),inch=p.heightIn%12;
