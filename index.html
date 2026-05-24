@@ -162,6 +162,7 @@
 <div id="modal"></div>
 <div id="toast"></div>
 <div id="timerbar"></div>
+<div id="ptbar"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 "use strict";
@@ -170,8 +171,9 @@
    Personal fitness + mindset + faith operating system.
    Built on Michael Smoak's program. Hosted, private, cloud-synced.
    =================================================================== */
-var APP_VERSION="1.1.0";
+var APP_VERSION="1.1.1";
 var CHANGELOG=[
+ {v:"1.1.1",d:"StarFit scale weight auto-syncs each morning. Weights show to 2 decimals. Pull down to refresh. Cleaner sign-out."},
  {v:"1.1.0",d:"Hamburger menu with all settings and sign-out. Auto sign-out after inactivity. Face ID unlock option for the journal. Privacy hardening."},
  {v:"1.0.0",d:"First release — hosted, private, synced across your devices. Training, nutrition, meal planning, progress dashboard, daily journal, and more."}
 ];
@@ -349,6 +351,7 @@ function save(){
  },900);
 }
 function pushWeight(k,lbs,source){
+ lbs=Math.round(lbs*100)/100;
  var found=false,i;
  for(i=0;i<WEIGHTS.length;i++){if(WEIGHTS[i].day===k){WEIGHTS[i].lbs=lbs;found=true;}}
  if(!found)WEIGHTS.push({day:k,lbs:lbs,source:source||"manual"});
@@ -367,7 +370,7 @@ function loadAll(cb){
     step();
   }).catch(function(){failed=true;step();});
  sb.from("weights").select("day,lbs,source").eq("user_id",USER.id)
-  .then(function(res){if(!res.error&&res.data)WEIGHTS=res.data;step();})
+  .then(function(res){if(!res.error&&res.data)WEIGHTS=res.data.map(function(w){return{day:w.day,lbs:Math.round((w.lbs||0)*100)/100,source:w.source};});step();})
   .catch(function(){step();});
 }
 
@@ -431,7 +434,11 @@ function doAuth(){
  }).catch(function(e){msg.style.color="var(--bad)";msg.textContent="Could not connect. Check your internet.";});
 }
 function signOut(){
- sb.auth.signOut().then(function(){USER=null;DB=newDB();WEIGHTS=[];authMode="signin";renderAuth();});
+ closeModal();
+ if(logoutInt)clearInterval(logoutInt);
+ var tb=document.getElementById("timerbar");if(tb)tb.innerHTML="";
+ try{localStorage.removeItem("to_lastact");}catch(e){}
+ sb.auth.signOut().then(function(){location.reload();}).catch(function(){location.reload();});
 }
 
 /* ---------- AUTO-LOGOUT (inactivity) ---------- */
@@ -1479,6 +1486,40 @@ function exportData(){
  document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
  toast("Backup downloaded.");
 }
+
+/* ---------- PULL TO REFRESH ---------- */
+var ptY0=0,ptOn=false,ptDist=0;
+function ptShow(d){
+ var el=document.getElementById("ptbar");if(!el)return;
+ if(d<=4){el.innerHTML="";return;}
+ el.innerHTML='<div style="position:fixed;top:0;left:0;right:0;text-align:center;padding:'+
+  Math.round(Math.min(d/2,42))+'px 0 8px;font-size:12px;font-weight:800;color:var(--accent);z-index:70;pointer-events:none">'+
+  (d>70?"Release to refresh":"Pull to refresh")+'</div>';
+}
+function doRefresh(){
+ var el=document.getElementById("ptbar");
+ if(!USER){location.reload();return;}
+ if(el)el.innerHTML='<div style="position:fixed;top:0;left:0;right:0;text-align:center;padding:16px 0 8px;font-size:12px;font-weight:800;color:var(--accent);z-index:70">Refreshing…</div>';
+ loadAll(function(failed){
+  if(el)el.innerHTML="";
+  if(failed)toast("Couldn't reach the server.");
+  else{render();toast("Refreshed.");}
+ });
+}
+document.addEventListener("touchstart",function(e){
+ var m=document.getElementById("modal");
+ ptOn=(window.scrollY<=0&&(!m||!m.innerHTML)&&!!USER);
+ ptY0=e.touches[0].clientY;ptDist=0;
+},{passive:true});
+document.addEventListener("touchmove",function(e){
+ if(!ptOn)return;
+ ptDist=e.touches[0].clientY-ptY0;
+ ptShow(ptDist>0&&window.scrollY<=0?ptDist:0);
+},{passive:true});
+document.addEventListener("touchend",function(){
+ if(ptOn&&ptDist>70)doRefresh();else ptShow(0);
+ ptOn=false;ptDist=0;
+},{passive:true});
 
 /* Handlers: top-level function declarations in this classic (non-module)
    script are already global, so inline onclick attributes resolve them. */
