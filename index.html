@@ -178,8 +178,9 @@
    Personal fitness + mindset + faith operating system.
    Built on Michael Smoak's program. Hosted, private, cloud-synced.
    =================================================================== */
-var APP_VERSION="1.2.1";
+var APP_VERSION="1.2.2";
 var CHANGELOG=[
+ {v:"1.2.2",d:"Journal now has a clear Draft vs Complete status — a 'Complete journal' button marks the day done and tracked, and 'Save draft' confirms your progress is saved. Each day also shows a recap of your previous entry — focus, gratitude, energy, and reflection — so you can carry yesterday forward."},
  {v:"1.2.1",d:"Fixed a bug where switching the Mon/Wed/Fri session selector erased the workout you'd already logged. Once you start logging, today's session is locked and saved — switch the selector freely without losing anything. New: Training History — every session you've logged, in one place."},
  {v:"1.2.0",d:"Training pre-fills every weight and rep from your last session — just adjust and go. Clearer 'Saved' confirmation and an in-progress workout status on the Today screen. Journal: browse past days and search any past entry by topic or keyword."},
  {v:"1.1.2",d:"The app now auto-updates — you always get the newest version when you open it."},
@@ -1235,12 +1236,13 @@ var MINDSET=[
 ];
 var LIFE_AREAS=["Faith","Family","Health","Work","Growth"];
 function journalBlank(){return{gratitude:["","",""],prayed:false,prayerList:[],focus:"",
- areas:{},energy:0,reflection:"",notes:""};}
+ areas:{},energy:0,reflection:"",notes:"",completed:false};}
 function journalFor(k){var d=day(k);if(!d.journal)d.journal=journalBlank();return d.journal;}
 function getJournal(k){var d=DB.days[k];return(d&&d.journal)?d.journal:null;}
 function jDateKey(){return state.journalDate||todayKey();}
 function hasJournalContent(j){
  if(!j)return false;
+ if(j.completed)return true;
  if(j.focus&&j.focus.trim())return true;
  if(j.reflection&&j.reflection.trim())return true;
  if(j.notes&&j.notes.trim())return true;
@@ -1275,9 +1277,29 @@ function journalDayLabel(k){
 function journalEntries(){
  var out=[],k;
  for(k in DB.days){var j=getJournal(k);if(hasJournalContent(j))
-  out.push({k:k,label:journalDayLabel(k),snippet:journalSnippet(j),hay:journalHaystack(j)});}
+  out.push({k:k,label:journalDayLabel(k),snippet:journalSnippet(j),hay:journalHaystack(j),completed:!!j.completed});}
  out.sort(function(a,b){return a.k<b.k?1:-1;});
  return out;}
+function prevJournalEntry(beforeKey){
+ var ks=Object.keys(DB.days).filter(function(k){return k<beforeKey;}).sort().reverse(),i;
+ for(i=0;i<ks.length;i++){var j=getJournal(ks[i]);if(hasJournalContent(j))return{k:ks[i],j:j};}
+ return null;}
+function journalRecapHtml(k){
+ var pe=prevJournalEntry(k);if(!pe)return "";
+ var pj=pe.j,h='',any=false;
+ h+='<div class="card"><div class="between" style="margin-bottom:2px">'+
+  '<div class="card-t" style="margin:0">Previous Entry · '+shortDate(pe.k)+(pj.completed?' ✓':'')+'</div>'+
+  '<button class="link" onclick="jGoDate(\''+pe.k+'\')">Open</button></div>';
+ if(pj.focus&&pj.focus.trim()){h+='<div class="small mt8"><b>Focus:</b> '+esc(pj.focus.trim())+'</div>';any=true;}
+ var grat=(pj.gratitude||[]).filter(function(g){return g&&g.trim();});
+ if(grat.length){h+='<div class="small mt8"><b>Grateful:</b> '+esc(grat.join(" · "))+'</div>';any=true;}
+ if(pj.energy){h+='<div class="small mt8"><b>Energy:</b> '+pj.energy+'/5</div>';any=true;}
+ if(pj.reflection&&pj.reflection.trim()){
+  var rt=pj.reflection.trim();if(rt.length>240)rt=rt.slice(0,238)+"…";
+  h+='<div class="small muted mt8" style="font-style:italic;border-left:2px solid var(--accent);padding-left:9px">'+esc(rt)+'</div>';any=true;}
+ if(!any)h+='<div class="tiny muted mt8">Check-in logged — tap Open to view it.</div>';
+ h+='</div>';
+ return h;}
 function scrJournal(){
  if(DB.settings.journalPin&&!state.journalUnlocked)return journalLockScreen();
  var k=jDateKey(),isToday=(k===todayKey());
@@ -1293,6 +1315,7 @@ function scrJournal(){
   '<button class="jnav" onclick="jNav(1)"'+(isToday?' disabled style="opacity:.28"':'')+'>›</button></div>'+
   '<div class="row mt8"><button class="btn sec sm grow" onclick="journalHistorySheet()">Browse &amp; search past days</button>'+
   (isToday?'':'<button class="btn sm grow" onclick="jGoToday()">Back to today</button>')+'</div></div>';
+ h+=journalRecapHtml(k);
  h+='<div class="card"><div class="card-t">Verse of the Day</div>'+
   '<div class="verse">'+verse[0]+'</div>'+
   '<div style="font-size:11.5px;color:var(--accent);font-weight:800;margin-top:6px">'+verse[1]+'</div></div>';
@@ -1330,6 +1353,17 @@ function scrJournal(){
  h+='<div class="card"><div class="card-t">Content Ideas</div>'+
   '<div class="tiny muted" style="margin-bottom:8px">Document, don\'t create. Capture what happened today that can help someone.</div>'+
   '<button class="btn sec sm" style="width:100%" onclick="ideasSheet()">Open ideas inbox ('+(DB.ideas?DB.ideas.length:0)+')</button></div>';
+ h+='<div class="card" style="text-align:center">';
+ if(j.completed){
+  h+='<div style="font-weight:800;color:var(--good);margin-bottom:4px">✓ Journal complete for '+(isToday?"today":shortDate(k))+'</div>'+
+   '<div class="tiny muted" style="margin-bottom:11px">Logged and tracked. You can still re-open it to add more.</div>'+
+   '<button class="btn sec" onclick="jReopen()">Re-open entry</button>';
+ }else{
+  h+='<div class="tiny muted" style="margin-bottom:11px">This entry is a draft — everything you write is saved automatically. Mark it complete when you’re done for the day.</div>'+
+   '<div class="row"><button class="btn sec grow" onclick="jSaveDraft()">Save draft</button>'+
+   '<button class="btn grow" onclick="jComplete()">Complete journal</button></div>';
+ }
+ h+='</div>';
  return h;
 }
 function journalLockScreen(){
@@ -1358,6 +1392,9 @@ function jPrayerAdd(){var v=prompt("Add to your prayer list:");if(v){journalFor(
 function jPrayerDel(i){journalFor(jDateKey()).prayerList.splice(i,1);save();render();}
 function jArea(a,n){journalFor(jDateKey()).areas[a]=n;save();render();}
 function jEnergy(n){journalFor(jDateKey()).energy=n;save();render();}
+function jComplete(){var j=journalFor(jDateKey());j.completed=true;j.completedAt=Date.now();save();render();toast("Journal complete for the day. Well done.");}
+function jReopen(){journalFor(jDateKey()).completed=false;save();render();}
+function jSaveDraft(){journalFor(jDateKey());save();toast("Draft saved.");}
 function jNav(delta){var d=new Date(jDateKey()+"T00:00");d.setDate(d.getDate()+delta);
  var nk=keyOf(d);if(nk>todayKey())return;
  state.journalDate=nk;render();window.scrollTo(0,0);}
@@ -1382,7 +1419,7 @@ function journalResultsHtml(){
   (q?('match'+(rows.length!==1?'es':'')):('day'+(rows.length!==1?'s':'')+' logged'))+'</div>';
  rows.forEach(function(e){
   h+='<div class="foodrow" onclick="jGoDate(\''+e.k+'\')" style="cursor:pointer">'+
-   '<div class="grow"><div class="fname">'+esc(e.label)+'</div>'+
+   '<div class="grow"><div class="fname">'+esc(e.label)+(e.completed?' <span style="color:var(--good)">✓</span>':'')+'</div>'+
    '<div class="fsub">'+esc(e.snippet)+'</div></div>'+
    '<div style="color:var(--accent);font-size:18px;font-weight:800">›</div></div>';});
  return h;}
