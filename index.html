@@ -178,8 +178,9 @@
    Personal fitness + mindset + faith operating system.
    Built on Michael Smoak's program. Hosted, private, cloud-synced.
    =================================================================== */
-var APP_VERSION="1.2.2";
+var APP_VERSION="1.2.3";
 var CHANGELOG=[
+ {v:"1.2.3",d:"Auto sign-out can now be turned off — choose 'Never' to stay signed in until you sign out yourself, or pick any timer from 15 minutes to 8 hours. Adding food now has a search bar — type to find any food instead of scrolling."},
  {v:"1.2.2",d:"Journal now has a clear Draft vs Complete status — a 'Complete journal' button marks the day done and tracked, and 'Save draft' confirms your progress is saved. Each day also shows a recap of your previous entry — focus, gratitude, energy, and reflection — so you can carry yesterday forward."},
  {v:"1.2.1",d:"Fixed a bug where switching the Mon/Wed/Fri session selector erased the workout you'd already logged. Once you start logging, today's session is locked and saved — switch the selector freely without losing anything. New: Training History — every session you've logged, in one place."},
  {v:"1.2.0",d:"Training pre-fills every weight and rep from your last session — just adjust and go. Clearer 'Saved' confirmation and an in-progress workout status on the Today screen. Journal: browse past days and search any past entry by topic or keyword."},
@@ -473,12 +474,13 @@ function signOut(){
 
 /* ---------- AUTO-LOGOUT (inactivity) ---------- */
 var lastAct=Date.now(),logoutInt=null,actWired=false,actSaved=0;
+function logoutMins(){var m=DB.settings&&DB.settings.autoLogoutMin;return m==null?30:m;}
 function bumpActivity(){
  lastAct=Date.now();
  if(lastAct-actSaved<5000)return;
  actSaved=lastAct;
  try{localStorage.setItem("to_lastact",String(lastAct));
-  localStorage.setItem("to_logoutmin",String((DB.settings&&DB.settings.autoLogoutMin)||30));}catch(e){}
+  localStorage.setItem("to_logoutmin",String(logoutMins()));}catch(e){}
 }
 function startActivityWatch(){
  if(!actWired){actWired=true;
@@ -487,7 +489,8 @@ function startActivityWatch(){
  if(logoutInt)clearInterval(logoutInt);
  logoutInt=setInterval(function(){
   if(!USER)return;
-  var mins=(DB.settings&&DB.settings.autoLogoutMin)||30;
+  var mins=logoutMins();
+  if(mins<=0)return;
   if(Date.now()-lastAct>mins*60000){toast("Signed out — inactive for "+mins+" min.");signOut();}
  },20000);
  bumpActivity();
@@ -495,6 +498,7 @@ function startActivityWatch(){
 function sessionStale(){
  try{var la=parseInt(localStorage.getItem("to_lastact")||"0",10);
   var lm=parseInt(localStorage.getItem("to_logoutmin")||"30",10);
+  if(lm<=0)return false;
   if(la&&(Date.now()-la)>lm*60000)return true;}catch(e){}
  return false;
 }
@@ -947,7 +951,7 @@ function nudgeFood(i,dir){
 
 /* ---------- ADD FOOD SHEET ---------- */
 var ss={};
-function addFoodSheet(meal){ss={meal:meal,mode:"lib",cat:"protein"};renderFoodSheet();}
+function addFoodSheet(meal){ss={meal:meal,mode:"lib",cat:"protein",q:""};renderFoodSheet();}
 function renderFoodSheet(){
  var h='<div class="grip"></div><div class="sheet-t">Add to '+ss.meal+'</div>';
  h+='<div class="seg" style="margin-bottom:12px">'+
@@ -957,14 +961,10 @@ function renderFoodSheet(){
   '<button class="'+(ss.mode==="manual"?"on":"")+'" onclick="fsMode(\'manual\')">Quick</button></div>';
  if(ss.mode==="lib"){
   var cats=[["protein","Protein"],["carb","Carbs"],["fat","Fats"],["veg","Veggies"]];
+  h+='<input id="foodsearch" class="inp" style="text-align:left;margin-bottom:8px" placeholder="Search foods…" value="'+esc(ss.q||"")+'" oninput="fsSearch(this.value)">';
   h+='<div class="seg" style="margin-bottom:6px">';
   cats.forEach(function(c){h+='<button class="'+(ss.cat===c[0]?"on":"")+'" onclick="fsCat(\''+c[0]+'\')">'+c[1]+'</button>';});
-  h+='</div><div style="max-height:44vh;overflow-y:auto">';
-  allFoods().filter(function(f){return f.cat===ss.cat;}).forEach(function(f){
-   h+='<div class="foodrow" onclick="pickFood(\''+f.id+'\')"><div><div class="fname">'+esc(f.name)+'</div>'+
-    '<div class="fsub">'+unitLabel(f,f.ref)+' · '+Math.round(f.cal)+' cal · '+r1(f.p)+'g P</div></div>'+
-    '<div style="color:var(--accent);font-size:21px;font-weight:800">+</div></div>';});
-  h+='</div>';
+  h+='</div><div id="foodlist" style="max-height:42vh;overflow-y:auto">'+foodListHtml()+'</div>';
  }else if(ss.mode==="meals"){
   if(!DB.savedMeals||!DB.savedMeals.length)h+='<div class="empty">No saved meals yet. Build one in "New food" → or save a logged meal from your diary.</div>';
   else DB.savedMeals.forEach(function(sm){
@@ -998,7 +998,19 @@ function renderFoodSheet(){
  openSheet(h);
 }
 function fsMode(m){ss.mode=m;renderFoodSheet();}
-function fsCat(c){ss.cat=c;renderFoodSheet();}
+function fsCat(c){ss.cat=c;ss.q="";renderFoodSheet();}
+function fsSearch(v){ss.q=v;var el=document.getElementById("foodlist");if(el)el.innerHTML=foodListHtml();}
+function foodListHtml(){
+ var q=(ss.q||"").trim().toLowerCase(),list;
+ if(q)list=allFoods().filter(function(f){return f.name.toLowerCase().indexOf(q)>=0;});
+ else list=allFoods().filter(function(f){return f.cat===ss.cat;});
+ if(!list.length)return '<div class="empty">No foods match “'+esc(ss.q)+'”. Try another word, or use “New food” to add it.</div>';
+ var h='';
+ list.forEach(function(f){
+  h+='<div class="foodrow" onclick="pickFood(\''+f.id+'\')"><div><div class="fname">'+esc(f.name)+'</div>'+
+   '<div class="fsub">'+catName(f.cat)+' · '+unitLabel(f,f.ref)+' · '+Math.round(f.cal)+' cal · '+r1(f.p)+'g P</div></div>'+
+   '<div style="color:var(--accent);font-size:21px;font-weight:800">+</div></div>';});
+ return h;}
 function pickFood(id){ss.food=foodById(id);ss.amt=ss.food.ref;renderAmtSheet();}
 function renderAmtSheet(){
  var f=ss.food,mac=macrosFor(f,ss.amt);
@@ -1650,10 +1662,11 @@ function settingsSheet(){
   '<select id="set-meals"><option value="3"'+(s.mealsPerDay===3?" selected":"")+'>3</option>'+
   '<option value="4"'+(s.mealsPerDay===4?" selected":"")+'>4</option></select></div>';
  h+='<div class="field"><label>Water goal (oz/day)</label><input id="set-water" type="number" inputmode="numeric" value="'+(s.waterGoalOz||128)+'"></div>';
+ var loCur=(s.autoLogoutMin==null?30:s.autoLogoutMin);
+ var loOpts=[[0,"Never — stay signed in until I sign out"],[15,"15 minutes"],[30,"30 minutes"],[60,"1 hour"],[120,"2 hours"],[240,"4 hours"],[480,"8 hours"]];
  h+='<div class="field"><label>Auto sign-out after inactivity</label><select id="set-logout">'+
-  [15,30,60,120].map(function(m){var lbl=m<60?(m+" minutes"):(m===60?"1 hour":"2 hours");
-   return '<option value="'+m+'"'+(((s.autoLogoutMin||30)===m)?" selected":"")+'>'+lbl+'</option>';}).join("")+
-  '</select></div>';
+  loOpts.map(function(o){return '<option value="'+o[0]+'"'+(loCur===o[0]?" selected":"")+'>'+o[1]+'</option>';}).join("")+
+  '</select><div class="tiny muted" style="margin-top:5px">“Never” keeps you signed in on this device until you sign out from the menu. Your journal passcode still protects the journal.</div></div>';
  h+='<div class="hr"></div><div class="card-t">Journal Lock</div>';
  h+='<div class="field"><label>Passcode (blank = no lock)</label>'+
   '<input id="set-pin" type="text" inputmode="numeric" maxlength="8" value="'+esc(s.journalPin)+'" placeholder="e.g. 1234"></div>';
@@ -1669,7 +1682,8 @@ function settingsSheet(){
 function saveSettings(){
  DB.settings.mealsPerDay=parseInt(document.getElementById("set-meals").value);
  DB.settings.waterGoalOz=parseInt(document.getElementById("set-water").value)||128;
- DB.settings.autoLogoutMin=parseInt(document.getElementById("set-logout").value)||30;
+ var loVal=parseInt(document.getElementById("set-logout").value,10);
+ DB.settings.autoLogoutMin=isNaN(loVal)?30:loVal;
  var pin=document.getElementById("set-pin").value.trim();
  DB.settings.journalPin=pin||null;
  if(!pin){state.journalUnlocked=false;DB.settings.journalFaceId=false;DB.settings.journalCredId=null;}
