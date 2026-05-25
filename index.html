@@ -178,8 +178,9 @@
    Personal fitness + mindset + faith operating system.
    Built on Michael Smoak's program. Hosted, private, cloud-synced.
    =================================================================== */
-var APP_VERSION="1.2.0";
+var APP_VERSION="1.2.1";
 var CHANGELOG=[
+ {v:"1.2.1",d:"Fixed a bug where switching the Mon/Wed/Fri session selector erased the workout you'd already logged. Once you start logging, today's session is locked and saved — switch the selector freely without losing anything. New: Training History — every session you've logged, in one place."},
  {v:"1.2.0",d:"Training pre-fills every weight and rep from your last session — just adjust and go. Clearer 'Saved' confirmation and an in-progress workout status on the Today screen. Journal: browse past days and search any past entry by topic or keyword."},
  {v:"1.1.2",d:"The app now auto-updates — you always get the newest version when you open it."},
  {v:"1.1.1",d:"StarFit scale weight auto-syncs each morning. Weights show to 2 decimals. Pull down to refresh. Cleaner sign-out."},
@@ -668,6 +669,35 @@ function workoutDates(){var a=[],k;for(k in DB.days){if(DB.days[k].workout&&DB.d
 function workoutProgress(w){var done=0,total=0;
  if(w&&w.ex)w.ex.forEach(function(e){e.sets.forEach(function(s){total++;if(s.done)done++;});});
  return{done:done,total:total};}
+function workoutHistory(){
+ var out=[],k;
+ for(k in DB.days){var w=DB.days[k].workout;
+  if(w&&(w.completed||w.touched))out.push({k:k,w:w});}
+ out.sort(function(a,b){return a.k<b.k?1:-1;});
+ return out;}
+function setSummary(e){
+ var parts=[];
+ (e.sets||[]).forEach(function(s){
+  if(s.weight==null&&s.reps==null)return;
+  parts.push((s.weight!=null?s.weight+"×":"")+(s.reps!=null?s.reps:"—"));});
+ return parts.join(", ");}
+function trainingHistorySheet(){
+ var hist=workoutHistory();
+ var h='<div class="grip"></div><div class="sheet-t">Training History</div>';
+ if(!hist.length){h+='<div class="empty">No sessions logged yet. Once you log a workout it shows here — and stays here.</div>';}
+ else{
+  h+='<div class="tiny muted" style="margin:2px 0 9px">'+hist.length+' session'+(hist.length!==1?'s':'')+' logged · every one is saved</div>';
+  hist.forEach(function(it){var w=it.w;
+   h+='<details><summary>'+shortDate(it.k)+' — '+esc(w.label||w.day)+'  '+
+    (w.completed?'<span style="color:var(--good);font-weight:800">✓</span>':'<span style="color:var(--warn)">· in progress</span>')+
+    '</summary><div class="ref">';
+   if(w.custom){h+=esc(w.notes||"Custom session");}
+   else{(w.ex||[]).forEach(function(e){var ss=setSummary(e);
+    h+='<b>'+esc(e.name)+'</b>'+(ss?(' — '+ss):' — not logged')+'<br>';});}
+   h+='</div></details>';});
+ }
+ h+='<button class="btn ghost mt8" onclick="closeModal()">Close</button>';
+ openSheet(h);}
 function weekStart(d){d=new Date(d);var x=(d.getDay()+6)%7;d.setDate(d.getDate()-x);d.setHours(0,0,0,0);return d;}
 function workoutsThisWeek(){var ws=weekStart(new Date()),n=0,i;
  for(i=0;i<7;i++){var dd=new Date(ws);dd.setDate(ws.getDate()+i);
@@ -782,9 +812,13 @@ function scrTrain(){
  var dn=(cur&&cur.day)||state.trainDay;
  var w=ensureWorkout(dn,cur&&cur.custom);
  var h='';
+ var locked=sessionLocked(w);
  h+='<div class="card"><div class="card-t">Session</div><div class="seg">';
- TRAIN_DAYS.forEach(function(d){h+='<button class="'+(dn===d?"on":"")+'" onclick="pickDay(\''+d+'\')">'+d.slice(0,3)+'</button>';});
- h+='<button class="'+(w.custom?"on":"")+'" onclick="customSession()">+ Custom</button></div></div>';
+ TRAIN_DAYS.forEach(function(d){var on=(dn===d);
+  h+='<button class="'+(on?"on":"")+'"'+(locked&&!on?' style="opacity:.36"':'')+' onclick="pickDay(\''+d+'\')">'+d.slice(0,3)+'</button>';});
+ h+='<button class="'+(w.custom?"on":"")+'"'+(locked&&!w.custom?' style="opacity:.36"':'')+' onclick="customSession()">+ Custom</button></div>';
+ if(locked)h+='<div class="tiny muted" style="margin-top:9px">Today’s '+esc(w.custom?(w.label||"custom"):w.day)+' session is logged and saved. <button class="link" onclick="switchSessionType()">Switch session type</button></div>';
+ h+='<button class="btn sec sm" style="width:100%;margin-top:10px" onclick="trainingHistorySheet()">Training history</button></div>';
  if(deloadDue())h+='<div class="coach"><div class="coach-h"><span class="dot"></span> Deload</div>'+
   '<div class="coach-b">You\'re due a lighter week. Run today\'s lifts but stop 3-4 reps short of failure, or drop a set. <button class="link" onclick="markDeload()">Mark deload taken</button></div></div>';
  else h+='<div class="coach"><div class="coach-h"><span class="dot"></span> Warm-up</div>'+
@@ -829,15 +863,24 @@ function scrTrain(){
 }
 function atTop(e){var any=false,i;for(i=0;i<e.sets.length;i++){var s=e.sets[i];
  if(s.reps==null||s.reps==="")return false;if(s.reps<e.hi)return false;any=true;}return any;}
-function pickDay(d){var L=day();if(L.workout&&!L.workout.completed&&L.workout.day!==d&&L.workout.touched){
- if(!confirm("Switch session? The sets you logged for the current session will be cleared."))return;}
+function sessionLocked(w){return !!(w&&(w.touched||w.completed));}
+function pickDay(d){var L=day(),w=L.workout;
+ if(sessionLocked(w)){
+  if(w.day===d)return;
+  toast("Your "+(w.custom?"current":w.day)+" session is logged & saved — use “Switch session type” to change it.");
+  return;}
  L.workout=null;state.trainDay=d;render();}
 function hasData(w){if(!w.ex)return false;var any=false;w.ex.forEach(function(e){e.sets.forEach(function(s){
  if(s.weight||s.reps)any=true;});});return any;}
-function customSession(){var L=day();
- if(L.workout&&!L.workout.completed&&!L.workout.custom&&L.workout.touched&&
-   !confirm("Switch to a custom session? The sets you logged will be cleared."))return;
+function customSession(){var L=day(),w=L.workout;
+ if(sessionLocked(w)){
+  if(w.custom)return;
+  toast("Your "+w.day+" session is logged & saved — use “Switch session type” to change it.");
+  return;}
  L.workout={day:"Custom",label:"Custom",custom:true,completed:false,touched:false,ex:[],notes:""};save();render();}
+function switchSessionType(){var L=day(),w=L.workout;if(!w)return;
+ if(!confirm("This clears the sets you logged for today’s "+(w.custom?"custom":w.day)+" session so you can pick a different one. Sessions from other days stay saved. Continue?"))return;
+ L.workout=null;render();}
 function customName(v){var w=day().workout;w.label=v||"Custom";w.touched=true;save();}
 function customNotes(v){var w=day().workout;w.notes=v;w.touched=true;save();}
 function setVal(ei,si,f,v){var n=v===""?null:parseFloat(v),w=day().workout;
@@ -1426,7 +1469,8 @@ function scrYou(){
  h+='<button class="btn sec sm" style="width:100%" onclick="measureSheet()">Log measurements</button></div>';
  h+='<div class="card"><div class="card-t">Consistency</div><div class="tiles">'+
   '<div class="tile"><div class="tile-v">'+workoutDates().length+'</div><div class="tile-l">Workouts logged</div></div>'+
-  '<div class="tile"><div class="tile-v">'+proteinAdherence()+'%</div><div class="tile-l">Protein hit (7 days)</div></div></div></div>';
+  '<div class="tile"><div class="tile-v">'+proteinAdherence()+'%</div><div class="tile-l">Protein hit (7 days)</div></div></div>'+
+  '<button class="btn sec sm" style="width:100%;margin-top:11px" onclick="trainingHistorySheet()">View all logged sessions</button></div>';
  h+='<div class="card"><div class="card-t">The Program</div>'+programRef()+'</div>';
  h+='<div class="card"><div class="card-t">Settings</div>'+
   '<button class="btn sec sm" style="width:100%;margin-bottom:7px" onclick="editProfileSheet()">Edit profile &amp; targets</button>'+
